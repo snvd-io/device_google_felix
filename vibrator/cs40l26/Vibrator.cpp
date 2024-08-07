@@ -677,8 +677,21 @@ Vibrator::Vibrator(std::unique_ptr<HwApi> hwApiDefault, std::unique_ptr<HwCal> h
         mSupportedPrimitives = defaultSupportedPrimitives;
     }
 
-    mPrimitiveMaxScale = {1.0f, 0.95f, 0.75f, 0.9f, 1.0f, 1.0f, 1.0f, 0.75f, 0.75f};
-    mPrimitiveMinScale = {0.0f, 0.01f, 0.11f, 0.23f, 0.0f, 0.25f, 0.02f, 0.03f, 0.16f};
+    mPrimitiveMaxScale.resize(WAVEFORM_MAX_INDEX, 100);
+    mPrimitiveMaxScale[WAVEFORM_CLICK_INDEX] = 95;
+    mPrimitiveMaxScale[WAVEFORM_THUD_INDEX] = 75;
+    mPrimitiveMaxScale[WAVEFORM_SPIN_INDEX] = 90;
+    mPrimitiveMaxScale[WAVEFORM_LIGHT_TICK_INDEX] = 75;
+    mPrimitiveMaxScale[WAVEFORM_LOW_TICK_INDEX] = 75;
+
+    mPrimitiveMinScale.resize(WAVEFORM_MAX_INDEX, 0);
+    mPrimitiveMinScale[WAVEFORM_CLICK_INDEX] = 1;
+    mPrimitiveMinScale[WAVEFORM_THUD_INDEX] = 11;
+    mPrimitiveMinScale[WAVEFORM_SPIN_INDEX] = 23;
+    mPrimitiveMinScale[WAVEFORM_SLOW_RISE_INDEX] = 25;
+    mPrimitiveMinScale[WAVEFORM_QUICK_FALL_INDEX] = 2;
+    mPrimitiveMinScale[WAVEFORM_LIGHT_TICK_INDEX] = 3;
+    mPrimitiveMinScale[WAVEFORM_LOW_TICK_INDEX] = 16;
 
     // ====== Get GPIO status and init it ================
     mGPIOStatus = mHwGPIO->getGPIO();
@@ -903,14 +916,6 @@ ndk::ScopedAStatus Vibrator::compose(const std::vector<CompositeEffect> &composi
             status = getPrimitiveDetails(e_curr.primitive, &effectIndex);
             if (!status.isOk()) {
                 return status;
-            }
-            // Add a max and min threshold to prevent the device crash(overcurrent) or no
-            // feeling
-            if (effectScale > mPrimitiveMaxScale[static_cast<uint32_t>(e_curr.primitive)]) {
-                effectScale = mPrimitiveMaxScale[static_cast<uint32_t>(e_curr.primitive)];
-            }
-            if (effectScale < mPrimitiveMinScale[static_cast<uint32_t>(e_curr.primitive)]) {
-                effectScale = mPrimitiveMinScale[static_cast<uint32_t>(e_curr.primitive)];
             }
             effectVolLevel = intensityToVolLevel(effectScale, effectIndex);
             totalDuration += mEffectDurations[effectIndex];
@@ -1412,7 +1417,13 @@ binder_status_t Vibrator::dump(int fd, const char **args, uint32_t numArgs) {
         }
     }
 
-    dprintf(fd, "Base: OWT waveform:\n");
+    dprintf(fd, "==== Scales ====\n\tId\tMinScale\tMaxScale\n");
+    for (effectId = 0; effectId < WAVEFORM_MAX_PHYSICAL_INDEX; effectId++) {
+        dprintf(fd, "\t%d\t%d\t\t%d\n", effectId, mPrimitiveMinScale[effectId],
+            mPrimitiveMaxScale[effectId]);
+    }
+
+    dprintf(fd, "\nBase: OWT waveform:\n");
     dprintf(fd, "\tId\tBytes\tData\tt\ttrigger button\n");
     for (effectId = WAVEFORM_MAX_PHYSICAL_INDEX; effectId < WAVEFORM_MAX_INDEX; effectId++) {
         uint32_t numBytes = mFfEffects[effectId].u.periodic.custom_len * 2;
@@ -1520,10 +1531,6 @@ ndk::ScopedAStatus Vibrator::getSimpleDetails(Effect effect, EffectStrength stre
         case Effect::HEAVY_CLICK:
             effectIndex = WAVEFORM_CLICK_INDEX;
             intensity *= 1.0f;
-            // WAVEFORM_CLICK_INDEX is 2, but the primitive CLICK index is 1.
-            if (intensity > mPrimitiveMaxScale[WAVEFORM_CLICK_INDEX - 1]) {
-                intensity = mPrimitiveMaxScale[WAVEFORM_CLICK_INDEX - 1];
-            }
             break;
         default:
             return ndk::ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
@@ -1765,6 +1772,17 @@ uint32_t Vibrator::intensityToVolLevel(float intensity, uint32_t effectIndex) {
             volLevel = calc(intensity, mClickEffectVol);
             break;
     }
+
+    // The waveform being played must fall within the allowable scale range
+    if (effectIndex < WAVEFORM_MAX_INDEX) {
+        if (volLevel > mPrimitiveMaxScale[effectIndex]) {
+            volLevel = mPrimitiveMaxScale[effectIndex];
+        }
+        if (volLevel < mPrimitiveMinScale[effectIndex]) {
+            volLevel = mPrimitiveMinScale[effectIndex];
+        }
+    }
+
     return volLevel;
 }
 
